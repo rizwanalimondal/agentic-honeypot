@@ -94,6 +94,23 @@ def honeypot(payload: Dict[str, Any], x_api_key: Optional[str] = Header(None)):
     session_id = payload.get("sessionId")
     message_text = payload.get("message", {}).get("text", "")
 
+    bank_accounts = re.findall(r"\b\d{12,18}\b", message_text)
+
+    upi_ids = re.findall(
+        r"\b[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}\b",
+        message_text
+    )
+
+    phone_numbers = re.findall(
+        r"\+91[-\s]?\d{10}\b|\b\d{10}\b",
+        message_text
+    )
+
+    phishing_links = re.findall(
+        r"https?://[^\s]+",
+        message_text
+    )
+
     if not session_id or not message_text:
         raise HTTPException(status_code=400, detail="Invalid payload")
 
@@ -108,6 +125,12 @@ def honeypot(payload: Dict[str, Any], x_api_key: Optional[str] = Header(None)):
             "suspiciousKeywords": set(),
             "reported": False
         }
+
+    sessions[session_id]["bankAccounts"].update(bank_accounts)
+    sessions[session_id]["upiIds"].update(upi_ids)
+    sessions[session_id]["phoneNumbers"].update(phone_numbers)
+    sessions[session_id]["phishingLinks"].update(phishing_links)
+
 
     session = sessions[session_id]
     session["message_count"] += 1
