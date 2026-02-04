@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Body
 from typing import Optional, Dict, Any
 import re
 import requests
@@ -88,8 +88,17 @@ def health_check(x_api_key: Optional[str] = Header(None)):
 
 
 @app.post("/honeypot")
-def honeypot(payload: Dict[str, Any], x_api_key: Optional[str] = Header(None)):
+def honeypot(
+    payload: Optional[Dict[str, Any]] = Body(None),
+    x_api_key: Optional[str] = Header(None)
+):
     verify_api_key(x_api_key)
+
+    if payload is None:
+        return {
+            "status": "success",
+            "reply": "Why is my account being suspended?"
+        }
 
     session_id = payload.get("sessionId")
     message_text = payload.get("message", {}).get("text", "")
