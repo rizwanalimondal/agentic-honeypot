@@ -87,6 +87,15 @@ def health_check(x_api_key: Optional[str] = Header(None)):
     return {"status": "ok", "message": "Agentic Honeypot API is running"}
 
 
+@app.get("/honeypot")
+def honeypot_get(x_api_key: Optional[str] = Header(None)):
+    verify_api_key(x_api_key)
+    return {
+        "status": "success",
+        "reply": "Why is my account being suspended?"
+    }
+
+
 @app.post("/honeypot")
 def honeypot(
     payload: Optional[Dict[str, Any]] = Body(None),
