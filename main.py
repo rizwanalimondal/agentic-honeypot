@@ -2,11 +2,12 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from typing import Optional, Dict, Any
 import re
 import requests
+import json
 
 app = FastAPI()
 
 API_KEY = "my-secret-api-key"
-sessions = {}
+sessions: Dict[str, Dict[str, Any]] = {}
 
 SCAM_KEYWORDS = [
     "account blocked",
@@ -19,12 +20,14 @@ SCAM_KEYWORDS = [
 ]
 
 PHONE_REGEX = re.compile(r"\+91\d{10}|\b\d{10}\b")
-UPI_REGEX = re.compile(r"\b[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}\b")
+UPI_REGEX = re.compile(r"\b[\w.-]+@[\w.-]+\b")
 URL_REGEX = re.compile(r"https?://\S+")
 BANK_REGEX = re.compile(r"\b\d{9,18}\b")
 
 GUVI_CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 
+
+# ----------------- HELPERS -----------------
 
 def verify_api_key(x_api_key: Optional[str]):
     if x_api_key != API_KEY:
@@ -37,22 +40,18 @@ def detect_scam(text: str) -> bool:
 
 
 def extract_intelligence(text: str, session: Dict[str, Any]):
-    for m in PHONE_REGEX.findall(text):
-        session["phoneNumbers"].add(m)
-    for m in UPI_REGEX.findall(text):
-        session["upiIds"].add(m)
-    for m in URL_REGEX.findall(text):
-        session["phishingLinks"].add(m)
-    for m in BANK_REGEX.findall(text):
-        session["bankAccounts"].add(m)
+    session["phoneNumbers"].update(PHONE_REGEX.findall(text))
+    session["upiIds"].update(UPI_REGEX.findall(text))
+    session["phishingLinks"].update(URL_REGEX.findall(text))
+    session["bankAccounts"].update(BANK_REGEX.findall(text))
 
 
 def should_terminate(session: Dict[str, Any]) -> bool:
     return (
-        session["message_count"] >= 5 or
-        session["upiIds"] or
-        session["phishingLinks"] or
-        session["phoneNumbers"]
+        session["message_count"] >= 5
+        or session["upiIds"]
+        or session["phishingLinks"]
+        or session["phoneNumbers"]
     )
 
 
@@ -77,6 +76,8 @@ def send_guvi_callback(session_id: str, session: Dict[str, Any]):
         pass
 
 
+# ----------------- ENDPOINTS -----------------
+
 @app.get("/")
 def health_check(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
@@ -96,10 +97,16 @@ def honeypot_get(x_api_key: Optional[str] = Header(None)):
 async def honeypot(request: Request, x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
 
-    #  THIS IS THE CRITICAL FIX
+    # 🚨 GUVI TESTER FIX: handle empty / non-JSON body safely
     try:
         payload = await request.json()
     except Exception:
+        return {
+            "status": "success",
+            "reply": "Why is my account being suspended?"
+        }
+
+    if not isinstance(payload, dict):
         return {
             "status": "success",
             "reply": "Why is my account being suspended?"
@@ -129,14 +136,15 @@ async def honeypot(request: Request, x_api_key: Optional[str] = Header(None)):
     session = sessions[session_id]
     session["message_count"] += 1
 
-    extract_intelligence(message_text, session)
-
     for k in SCAM_KEYWORDS:
         if k in message_text.lower():
             session["suspiciousKeywords"].add(k)
 
     if detect_scam(message_text):
         session["scam_detected"] = True
+        extract_intelligence(message_text, session)
+
+    if session["scam_detected"]:
         reply = "Why is my account being suspended?"
     else:
         reply = "Okay"
