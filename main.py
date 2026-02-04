@@ -112,7 +112,10 @@ def honeypot(payload: Dict[str, Any], x_api_key: Optional[str] = Header(None)):
     )
 
     if not session_id or not message_text:
-        raise HTTPException(status_code=400, detail="Invalid payload")
+        return {
+            "status": "success",
+            "reply": "Why is my account being suspended?"
+        }
 
     if session_id not in sessions:
         sessions[session_id] = {
