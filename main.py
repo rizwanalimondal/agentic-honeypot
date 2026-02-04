@@ -144,9 +144,9 @@ def honeypot(payload: Dict[str, Any], x_api_key: Optional[str] = Header(None)):
 
     if session["scam_detected"]:
         extract_intelligence(message_text, session)
-        reply = "Why is my account being blocked?"
+        reply = "Why is my account being suspended?"
     else:
-        reply = "Sorry, I did not understand. Can you explain?"
+        reply = "Okay"
 
     # FINAL CALLBACK (only once)
     if session["scam_detected"] and should_terminate(session) and not session["reported"]:
