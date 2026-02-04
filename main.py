@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException, Body
+from fastapi import FastAPI, Header, HTTPException, Request
 from typing import Optional, Dict, Any
 import re
 import requests
@@ -7,7 +7,7 @@ app = FastAPI()
 
 API_KEY = "my-secret-api-key"
 
-sessions = {}
+sessions: Dict[str, Dict[str, Any]] = {}
 
 SCAM_KEYWORDS = [
     "account blocked",
@@ -27,28 +27,27 @@ BANK_REGEX = re.compile(r"\b\d{9,18}\b")
 GUVI_CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 
 
-def verify_api_key(x_api_key: Optional[str] = Header(None)):
+# ------------------ helpers ------------------
+
+def verify_api_key(x_api_key: Optional[str]):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 def detect_scam(text: str) -> bool:
     text = text.lower()
-    return any(keyword in text for keyword in SCAM_KEYWORDS)
+    return any(k in text for k in SCAM_KEYWORDS)
 
 
 def extract_intelligence(text: str, session: Dict[str, Any]):
-    for match in PHONE_REGEX.findall(text):
-        session["phoneNumbers"].add(match)
-
-    for match in UPI_REGEX.findall(text):
-        session["upiIds"].add(match)
-
-    for match in URL_REGEX.findall(text):
-        session["phishingLinks"].add(match)
-
-    for match in BANK_REGEX.findall(text):
-        session["bankAccounts"].add(match)
+    for m in PHONE_REGEX.findall(text):
+        session["phoneNumbers"].add(m)
+    for m in UPI_REGEX.findall(text):
+        session["upiIds"].add(m)
+    for m in URL_REGEX.findall(text):
+        session["phishingLinks"].add(m)
+    for m in BANK_REGEX.findall(text):
+        session["bankAccounts"].add(m)
 
 
 def should_terminate(session: Dict[str, Any]) -> bool:
@@ -70,7 +69,7 @@ def send_guvi_callback(session_id: str, session: Dict[str, Any]):
             "upiIds": list(session["upiIds"]),
             "phishingLinks": list(session["phishingLinks"]),
             "phoneNumbers": list(session["phoneNumbers"]),
-            "suspiciousKeywords": list(session["suspiciousKeywords"])
+            "suspiciousKeywords": list(session["suspiciousKeywords"]),
         },
         "agentNotes": "Scam detected using urgency and payment redirection tactics"
     }
@@ -80,6 +79,8 @@ def send_guvi_callback(session_id: str, session: Dict[str, Any]):
     except Exception:
         pass
 
+
+# ------------------ endpoints ------------------
 
 @app.get("/")
 def health_check(x_api_key: Optional[str] = Header(None)):
@@ -97,13 +98,23 @@ def honeypot_get(x_api_key: Optional[str] = Header(None)):
 
 
 @app.post("/honeypot")
-def honeypot(
-    payload: Optional[Dict[str, Any]] = Body(None),
+async def honeypot(
+    request: Request,
     x_api_key: Optional[str] = Header(None)
 ):
     verify_api_key(x_api_key)
 
-    if payload is None:
+    # ---- CRITICAL FIX ----
+    # GUVI tester sends POST with empty / invalid JSON body
+    try:
+        payload = await request.json()
+    except Exception:
+        return {
+            "status": "success",
+            "reply": "Why is my account being suspended?"
+        }
+
+    if not isinstance(payload, dict):
         return {
             "status": "success",
             "reply": "Why is my account being suspended?"
@@ -111,23 +122,6 @@ def honeypot(
 
     session_id = payload.get("sessionId")
     message_text = payload.get("message", {}).get("text", "")
-
-    bank_accounts = re.findall(r"\b\d{12,18}\b", message_text)
-
-    upi_ids = re.findall(
-        r"\b[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}\b",
-        message_text
-    )
-
-    phone_numbers = re.findall(
-        r"\+91[-\s]?\d{10}\b|\b\d{10}\b",
-        message_text
-    )
-
-    phishing_links = re.findall(
-        r"https?://[^\s]+",
-        message_text
-    )
 
     if not session_id or not message_text:
         return {
@@ -147,29 +141,27 @@ def honeypot(
             "reported": False
         }
 
-    sessions[session_id]["bankAccounts"].update(bank_accounts)
-    sessions[session_id]["upiIds"].update(upi_ids)
-    sessions[session_id]["phoneNumbers"].update(phone_numbers)
-    sessions[session_id]["phishingLinks"].update(phishing_links)
-
-
     session = sessions[session_id]
     session["message_count"] += 1
 
-    for keyword in SCAM_KEYWORDS:
-        if keyword in message_text.lower():
-            session["suspiciousKeywords"].add(keyword)
+    # extraction
+    extract_intelligence(message_text, session)
+
+    # keyword tracking
+    for k in SCAM_KEYWORDS:
+        if k in message_text.lower():
+            session["suspiciousKeywords"].add(k)
 
     if not session["scam_detected"] and detect_scam(message_text):
         session["scam_detected"] = True
 
-    if session["scam_detected"]:
-        extract_intelligence(message_text, session)
-        reply = "Why is my account being suspended?"
-    else:
-        reply = "Okay"
+    reply = (
+        "Why is my account being suspended?"
+        if session["scam_detected"]
+        else "Okay"
+    )
 
-    # FINAL CALLBACK (only once)
+    # final callback (once)
     if session["scam_detected"] and should_terminate(session) and not session["reported"]:
         send_guvi_callback(session_id, session)
         session["reported"] = True
